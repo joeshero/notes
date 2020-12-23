@@ -3,4 +3,4 @@ study notes
 
 ## Linux
 
-- [shell](./shell.md)
+- [shell](./linux/shell.md)
