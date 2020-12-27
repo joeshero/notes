@@ -2,7 +2,8 @@
 
 #### 架构
 
-<img src="../assets/mysql/MySQL架构.png" width = "450" alt="MySQL架构" align=center />
+<img src="../assets/mysql/MySQL架构.png" width = "450" alt="MySQL架构" align="center" />
+
 **mysql**的架构图如图所示，其中分为
 
 * server层
@@ -57,10 +58,14 @@ select * from T where ID=10;
 
 ##### redo log
 
+<img src="../assets/mysql/redo_log_file.png" width = "450" alt="redo_log_file.png" align="center" />
+
 重做日志，用来记录数据页的物理改变，InnoDB存储引擎专属。实现MySQL中的WAL技术，即Write-Ahead Logging，先写日志，再写磁盘。
 包括两个部分，redo log buffer和 redo log file。![redo_log_file.png](../assets/mysql/redo_log_file.png)redo log通过循环写来记录
 变更，当文件满后，要先停下将log中变更写入磁盘，再继续更新，可以实现crash-safe。
 ![redo_log_写入流程.png](../assets/mysql/redo_log写入流程.png)
+
+<img src="../assets/mysql/redo_log写入流程.png" width = "450" alt="redo_log写入流程.png" align="center" />
 
 ##### binlog
 
@@ -73,6 +78,8 @@ select * from T where ID=10;
 对于一个update语句，MySQL会先判断内存中是否有更新的相应行，没有就从磁盘加载，之后将更新后的新行更新到内存，将变更写入redo log,
 此时处于prepare状态，写入binlog，待事务提交后，将状态改为commit。![事务提交示意.png](../assets/mysql/事务提交示意图.png)
 
+<img src="../assets/mysql/事务提交示意图.png" width = "450" alt="事务提交示意图.png" align="center" />
+
 **事务提交采用两阶段提交**，让两个日志的状态保持一致。如果先写redo log后写binlog，如果redo log写完后系统崩溃，那么binlog会少一次更新的记录。
 如果先写binlog后写redo log，如果写完binlog后系统崩溃，redo log还没有写，恢复后这个事务无效，用binlog会多出一次更新的记录，与原库不一致。
 
@@ -84,7 +91,9 @@ select * from T where ID=10;
 ```mysql
 show variables like 'log_error';
 ```
-![log_error.png](../assets/mysql/log_error.png)
+<img src="../assets/mysql/log_error.png" width = "450" alt="log_error.png" align="center" />
+
+
 ##### slow log
 
 慢查询日志
@@ -113,7 +122,8 @@ ACID(Atomicity, Consistency,Isolation, Durability)，原子性，一致性，隔
 ##### 隔离级别的实现(MVCC)
 
 在MySQL中，每一条记录的更新都会有回滚日志，假设一个值1被按顺序改成了2，3，4，回滚日志就会记录相应的改动。
-![undo_log.png](../assets/mysql/undo_log.png)
+<img src="../assets/mysql/undo_log.png" width = "450" alt="undo_log.png" align="center" />
+
 根据隔离级别的不同，同一条记录在系统中可能存在不同的版本，这就是MySQL的多版本并发控制(MVCC)。对于read-view A，需要将当前值一次进行回滚。
 回滚日志在适当的时机会删除(认定没有事务需要到它们的时候，即当前系统中没有比这个回滚日志更早的read-view的时候)
 
