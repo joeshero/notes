@@ -2,7 +2,7 @@
 
 #### 架构
 
-![MySQL架构](../assets/mysql/MySQL架构.png)
+<img src="../assets/mysql/MySQL架构.png" width = "450" alt="MySQL架构" align=center />
 **mysql**的架构图如图所示，其中分为
 
 * server层
@@ -146,6 +146,8 @@ InnoDB的索引为b+树，N叉有序搜索树。根据索引类型，可以分�
 ##### 索引的优化
 
 - 覆盖索引
+
+如果一个
 
 
 
