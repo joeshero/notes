@@ -127,8 +127,8 @@ ACID(Atomicity, Consistency,Isolation, Durability)，原子性，一致性，隔
 
 ## 事务
 
-- begin/start transaction显式开启，直到执行第一条语句时才真正启动事务，commit提交事务(建议)。要想立即开启一个事务可以使用
-start transaction with consistent snapshot，可以立即开启一个一致性视图
+- `begin/start transaction`显式开启，直到执行第一条语句时才真正启动事务，commit提交事务(建议)。要想立即开启一个事务可以使用
+`start transaction with consistent snapshot`，可以立即开启一个一致性视图
 - set autocommit=0，将当前线程的自动提交关掉，需要主动commit/rollback
 - 一致性视图：InnoDB在实现MVCC时用到的一致性视图，用来支持RC和RR的隔离级别
 - 更新数据时，使用当前读
@@ -182,11 +182,40 @@ InnoDB的索引为b+树，N叉有序搜索树。根据索引类型，可以分�
 有个联合索引(a,b),如果使用 **select * from t where a like 'abc%' and b = 'hello'** 查询的话，虽然可以使用联合索引的b+树，
 但只能使用到a，无法使用到b，在回表时，MySQL会先判断b是否等于'hello'，如果不等于，就不会去回表，减少回表次数。
 
+### 唯一索引和普通索引的区别
+
+查询时，有于唯一索引的唯一性，所以只要查到一行便可返回，普通索引需要查到不满足条件的行为止。
+更新数据页时，如果数据页在内存中，则直接更新内存，如果不在，InnoDB会将更新混存在change buffer，下次将该数据页加载到内存中时再更新以提高效率。
+change buffer也可以持久化到磁盘，并且后台线程会定时将change buffer的更新应用到数据页(称为merge)。数据库关闭时，也会merge。对于唯一索引，
+需要判断表中是否已经存在相同记录，所以需要加载数据页到内存，不会用到change buffer。change buffer使用的是buffer pool的内存，
+可用 `innodb_change_buffer_max_size` 配置。
+当要更新的数据页在内存，如要更新id=2的行，普通索引找到1到3之间的位置插入，而唯一索引还需要判断1到3之间有没有冲突，此时二者性能几乎相同；
+当数据页不在内存中，唯一索引需要将所需要的数据页读入内存进行判断，而普通索引直接将更新记录在change buffer，之后返回。change buffer
+减少了随机磁盘IO，会提升性能。
+  <img src="../assets/mysql/change_buffer更新过程.png" width = "450" alt="change_buffer更新过程.png" />
+
+** redo log主要节省随机写磁盘的IO消耗， change buffer主要节省随机读磁盘的IO消耗
+
+### 优化器选错索引
+
+优化器在选择索引时，不仅要参考预计扫描的行数，还要考虑到k索引数回表，是否使用临时表，是否排序等等。可以使用force index(index_name)来指定索引
+查询。可以使用
+```
+select * from t force index(a) where a between 10000 and 20000;
+```
+
+eg:
+```
+select * from t where (a between 1 and 1000) and (b between 50000 and 100000) order by b limit 1;
+```
+如果选择a作为索引，需要扫描1000行，选择b需要扫描50001行，但优化器考虑到选择b作为索引可以避免排序，所以选择了b
+
+####
 ## 锁
 
 ### 分类
 
-- 全局锁，对整个数据库进行加锁，flush table with read lock，将数据库设置为只读状态，一般用于库的备份
+- 全局锁，对整个数据库进行加锁，`flush table with read lock`，将数据库设置为只读状态，一般用于库的备份
 - 表级锁，对表加锁
 - 行锁，对行加锁
 
@@ -211,7 +240,7 @@ MySQL的行锁由各个存储引擎自己实现，通过行锁可以提高业务
 
 当两个事务都在等待对方释放自身的资源，就进入了死锁。处理策略：
 
-- 进入锁等待，超过innodb_lock_wait_timeout后，超时释放锁
+- 进入锁等待，超过`innodb_lock_wait_timeout`后，超时释放锁
 - 进行死锁检测(缺点是需要消耗额外的性能去判断是否出现死锁，造成CPU资源的消耗)
 
 
