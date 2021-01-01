@@ -70,6 +70,7 @@ redo log buffer 和 redo log file。redo log 通过循环写来记录变更，�
 <div align="center">
  <img src="../assets/mysql/redo_log写入流程.png" width = "450" alt="redo_log写入流程.png" />
 </div>
+
 ### binlog
 
 归档日志，Server 层日志，每个存储引擎共享，逻辑日志，记录某行发生了什么改变。
@@ -85,8 +86,24 @@ redo log buffer 和 redo log file。redo log 通过循环写来记录变更，�
  <img src="../assets/mysql/事务提交示意图.png" width = "450" alt="事务提交示意图.png" />
 </div>
 
-**事务提交采用两阶段提交**，让两个日志的状态保持一致。如果先写 redo log 后写 binlog，如果 redo log 写完后系统崩溃，那么 binlog 会少一次更新的记录。
-如果先写 binlog 后写 redo log，如果写完 binlog 后系统崩溃，redo log 还没有写，恢复后这个事务无效，用 binlog 会多出一次更新的记录，与原库不一致。
+### binlog 格式
+
+- STATEMENT: 基于 sql 语句的复制
+- ROW: 基于行的复制
+- MIXED: 混合模式复制
+
+#### 一次更新操作如何执行
+
+由于 MySQL 的 WAL 机制， 所以一条更新语句在写入 redo log 就算完成了，之后的**事务提交采用两阶段提交**，让两个日志的状态保持一致。
+如果先写 redo log 后写 binlog，如果 redo log 写完后系统崩溃，那么 binlog 会少一次更新的记录。
+如果先写 binlog 后写 redo log，如果写完 binlog 后系统崩溃，redo log 还没有写，恢复后这个事务无效，用 binlog 会多出一次更新的记录，
+与原库不一致，所以要采用两阶段提交。
+
+崩溃回复时，如果写完 redo log 写 binlog 之前发生了崩溃，由于 binlog 还没写，事务会回滚； 如果 binlog写完，
+redo log commit 时发生 crash， 如果崩溃恢复时 redo log 已经有 commit 标识， 则事务直接提交；如果 redo log 和 binlog 都存在且完整，
+就提交事务， 否则就回滚事务。
+
+
 
 ### undo log
 
@@ -142,9 +159,9 @@ ACID(Atomicity, Consistency, Isolation, Durability)，原子性，一致性，�
 
 ## 事务
 
-- `begin/start transaction` 显式开启，直到执行第一条语句时才真正启动事务，commit提交事务(建议)。要想立即开启一个事务可以使用 
+- `begin/start transaction` 显式开启，直到执行第一条语句时才真正启动事务，commit 提交事务(建议)。要想立即开启一个事务可以使用 
 `start transaction with consistent snapshot`，可以立即开启一个一致性视图
-- set autocommit=0，将当前线程的自动提交关掉，需要主动commit/rollback
+- set autocommit=0，将当前线程的自动提交关掉，需要主动 commit/rollback
 - 一致性视图：InnoDB 在实现 MVCC 时用到的一致性视图，用来支持RC和RR的隔离级别
 - 更新数据时，使用当前读
 
@@ -196,8 +213,8 @@ InnoDB 的索引为 b+ 树，N 叉有序搜索树。根据索引类型，可以�
 或者建立了一个联合索引(a,b)，利用 **select b from t where a = 'xxx'** 的方式可以使用到覆盖索引。
 - 最左前缀匹配
 - 索引下推
-有个联合索引(a,b),如果使用 **select * from t where a like 'abc%' and b = 'hello'** 查询的话，虽然可以使用联合索引的b+树，
-但只能使用到a，无法使用到b，在回表时，MySQL会先判断b是否等于'hello'，如果不等于，就不会去回表，减少回表次数。
+有个联合索引(a,b),如果使用 **select * from t where a like 'abc%' and b = 'hello'** 查询的话，虽然可以使用联合索引的 b+ 树，
+但只能使用到 a，无法使用到 b，在回表时，MySQL 会先判断 b 是否等于 'hello'，如果不等于，就不会去回表，减少回表次数。
 
 ### 唯一索引和普通索引的区别
 
@@ -206,14 +223,15 @@ InnoDB 的索引为 b+ 树，N 叉有序搜索树。根据索引类型，可以�
 change buffer 也可以持久化到磁盘，并且后台线程会定时将 change buffer 的更新应用到数据页(称为 merge)。数据库关闭时，也会 merge。对于唯一索引，
 需要判断表中是否已经存在相同记录，所以需要加载数据页到内存，不会用到 change buffer。change buffer 使用的是 buffer pool 的内存，
 可用 `innodb_change_buffer_max_size` 配置。
+
 当要更新的数据页在内存，如要更新 id=2 的行，普通索引找到 1 到 3 之间的位置插入，而唯一索引还需要判断 1 到 3 之间有没有冲突，此时二者性能几乎相同；
 当数据页不在内存中，唯一索引需要将所需要的数据页读入内存进行判断，而普通索引直接将更新记录在 change buffer，之后返回。change buffer
-减少了随机磁盘IO，会提升性能。
+减少了随机磁盘 IO，会提升性能。
 <div align="center">
   <img src="../assets/mysql/change_buffer更新过程.png" width = "450" alt="change_buffer更新过程.png" />
 </div>
 
-**redo log主要节省随机写磁盘的 IO 消耗， change buffer主要节省随机读磁盘的 IO 消耗**
+**redo log 主要节省随机写磁盘的 IO 消耗， change buffer 主要节省随机读磁盘的 IO 消耗**
 
 ### 优化器选错索引
 
@@ -264,6 +282,14 @@ MySQL 的行锁由各个存储引擎自己实现，通过行锁可以提高业�
 
 ## 常见问题
 
+### binlog 能实现崩溃恢复么
+
+binlog 记录的是行记录的变化，没有能力来恢复数据页
+
+### 只用 redo log， 不用 binlog 可以么
+
+redo log 是循环写，无法归档，并且在一些利用 binlog 来更新数据的场景如果不使用 binlog，将无法使用
+
 ### 某条查询语句突然变慢
 
 InnoDB 使用 buffer pool 管理内存，在内存中有三种状态的数据页：脏页，干净页，未使用页。当查询时发现没有可用内存时，要把最久不使用的数据页置换掉，
@@ -282,15 +308,32 @@ InnoDB 利用 b+ 树来组织数据，当记录删掉后，对应的位置会被
 ### count(*),count(1)和count(column)
 
 - 由于 InnoDB 的 MVCC，每一行都要判断是否对当前会话可见，所以需要一行一行读取记录。
-- count(*)时，InnoDB 会选择最小的树来遍历，将所有行数返回，InnoDB 做了优化
-- count(1)时，InnoDB 会选择最小的树来遍历，将所有行都替换成1返回
+- count(*) 时，InnoDB 会选择最小的树来遍历，将所有行数返回，InnoDB 做了优化
+- count(1) 时，InnoDB 会选择最小的树来遍历，将所有行都替换成1返回
 - count(主键),将所有行的主键拿出返回
 
-* count(字段)<count(主键 id)<count(1)≈count(*)
+* count(字段) < count(主键 id) < count(1) ≈ count(*)
   
 ### 如何排序
 
-使用 sort_buffer，其大小由 `sort_buffer_size` 来确定，如果空间不够需要使用外部临时文件采用归并排序来满足。
+使用 sort_buffer，其大小由 `sort_buffer_size` 来确定，如果空间不够需要使用外部临时文件采用归并排序来满足。在排序算法上，MySQL 优先将所有
+查询的字段存到 sort_buffer 再排序，当空间不足以存放这些字段时，会将排序字段和主键放入 buffer 中排序，之后通过主键回表二次查找其他要返回的值。
+
+### 更新一条语句时，如果要修改的值和原数据相同，还会执行么
+
+当 MySQL 根据条件判断不需要修改时，就不会修改。例如在 `binlog_format=ROW` 并且 `binlog_row_image=FULL` 的条件下，MySQL 需要记录所有的
+字段，所以需要将所有数据读出进行判断，但如果 `binlog_format=STATEMENT`,则只记录更新语句所以
+```
+> select * from t where id=2;
++----+------+------+
+| id | a    | b    |
++----+------+------+
+|  2 |    2 |    2 |
++----+------+------+
+
+> update t set a=3 where id=2;  //不更新
+> update t set a=3 where id=2 and a=3; //更新
+```
 
 
 
