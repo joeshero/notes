@@ -168,7 +168,7 @@ Java 堆可以不是物理上连续的内存空间，就像我们的磁盘一样
 #### G1收集器
 
 <div align="center">
-  <img src="../assets/jvm/g1.png.png" width = "450" alt="g1.png" />
+  <img src="../assets/jvm/g1.png" width = "450" alt="g1.png" />
 </div>
 
 面向服务端应用的垃圾收集器，在多 CPU 和大内存的场景下有很好的性能。
