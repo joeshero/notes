@@ -80,6 +80,16 @@ redo log buffer 和 redo log file。redo log 通过循环写来记录变更，�
 在事务执行过程中，redo log 写入 redo log buffer 中，在事务没提交之前，不需要持久化到磁盘。但一个没有提交事务的 redo log 有可能被持久化到
 磁盘。InnoDB 利用 `innodb_flush_log_at_trx_commit` 来控制 redo log 的写入。
 
+- 设置为 0，表示每次事务提交都把 redo log 留在 redo log buffer 中。
+- 设置为 1，表示每次事务提交直接把 redo log 持久化到磁盘。
+- 设置为 2，表示每次事务提交都直接把 redo log 写到 page cache 中。
+
+InnoDB 后台有个线程，每隔 1s 会将 redo log 调用 write 写到 文件系统的 page cache 中，再调用 fsync 持久化到磁盘。除此之外，还有两种情况会
+写盘。
+
+- 使用 redo log buffer 的大小超过 `innodb_log_buffer_size` 的一半，会调用 write 写盘。
+- 如果 `innodb_flush_log_at_trx_commit` 设置为 1, 一个事务的提交会将 redo log 写盘，如果 buffer 中有未提交事务的日志，也会写盘。
+
 ### binlog
 
 归档日志，Server 层日志，每个存储引擎共享，逻辑日志，记录某行发生了什么改变。
