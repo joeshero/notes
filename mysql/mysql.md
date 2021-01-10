@@ -71,6 +71,15 @@ redo log buffer 和 redo log file。redo log 通过循环写来记录变更，�
  <img src="../assets/mysql/redo_log写入流程.png" width = "450" alt="redo_log写入流程.png" />
 </div>
 
+#### redo log 写入机制
+
+<div align="center">
+  <img src="../assets/mysql/redo_log存储状态.png" width = "450" alt="redo_log存储状态.png" />
+</div>
+
+在事务执行过程中，redo log 写入 redo log buffer 中，在事务没提交之前，不需要持久化到磁盘。但一个没有提交事务的 redo log 有可能被持久化到
+磁盘。InnoDB 利用 `innodb_flush_log_at_trx_commit` 来控制 redo log 的写入。
+
 ### binlog
 
 归档日志，Server 层日志，每个存储引擎共享，逻辑日志，记录某行发生了什么改变。
@@ -86,7 +95,7 @@ redo log buffer 和 redo log file。redo log 通过循环写来记录变更，�
  <img src="../assets/mysql/事务提交示意图.png" width = "450" alt="事务提交示意图.png" />
 </div>
 
-### binlog 格式
+#### binlog 格式
 
 - STATEMENT: 基于 sql 语句的复制
 - ROW: 基于行的复制
@@ -103,7 +112,25 @@ redo log buffer 和 redo log file。redo log 通过循环写来记录变更，�
 redo log commit 时发生 crash， 如果崩溃恢复时 redo log 已经有 commit 标识， 则事务直接提交；如果 redo log 和 binlog 都存在且完整，
 就提交事务， 否则就回滚事务。
 
+#### binlog 写入机制
 
+<div align="center">
+  <img src="../assets/mysql/binlog写盘.png" width = "450" alt="binlog写盘.png" />
+</div>
+
+一个事务在执行过程中，先把日志写入 binlog cache，在事务提交后，再将 binlog cache 写入 binlog 文件中。每个线程都有自己的 binlog cache，
+但是共用同一份 binlog 文件。
+
+- write: 把日志文件写到文件系统的 page cache 中，没有持久化到磁盘，速度很快。
+- fsync: 将数据持久化到磁盘中，占用磁盘的 IOPS。
+
+write 和 fsync 的时机是由参数 `sync_binlog` 来控制的：
+
+1. sync_binlog = 0，表示每次提交事务，只 write，不 fsync。
+2. sync_binlog = 1，表示每次提交事务，同时 write 和 fsync。
+3. sync_binlog = N (N > 1)，表示每次提交事务都 write，累积 N 个事务后 fsync。
+ 
+**将 sync_binlog 设置为 N，如果主机重启，最多可丢失 N 个事务的 binlog 日志**。
 
 ### undo log
 
@@ -315,6 +342,9 @@ lock in share mode 只会对查询条件中的索引加锁，而 for update 会�
 - 进入锁等待，超过 `innodb_lock_wait_timeout` 后，超时释放锁
 - 进行死锁检测(缺点是需要消耗额外的性能去判断是否出现死锁，造成CPU资源的消耗)
 
+## MySQL 主从
+
+###
 
 ## 常见问题
 
