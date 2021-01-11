@@ -90,6 +90,9 @@ InnoDB 后台有个线程，每隔 1s 会将 redo log 调用 write 写到 文件
 - 使用 redo log buffer 的大小超过 `innodb_log_buffer_size` 的一半，会调用 write 写盘。
 - 如果 `innodb_flush_log_at_trx_commit` 设置为 1, 一个事务的提交会将 redo log 写盘，如果 buffer 中有未提交事务的日志，也会写盘。
 
+如果将 `innodb_flush_log_at_trx_commit` 设置为 1，那么 redo log 在 prepare 阶段就要持久化一次。 由于后台线程每秒一次刷盘和崩溃恢复机制，
+所以 redo log commit 阶段只需要 write 到page cache即可。
+
 ### binlog
 
 归档日志，Server 层日志，每个存储引擎共享，逻辑日志，记录某行发生了什么改变。
@@ -142,6 +145,12 @@ write 和 fsync 的时机是由参数 `sync_binlog` 来控制的：
  
 **将 sync_binlog 设置为 N，如果主机重启，最多可丢失 N 个事务的 binlog 日志**。
 
+#### 双 "1" 配置
+
+将 `sync_binlog` 和 `innodb_flush_log_at_trx_commit` 都设置为1，这样一次事务提交会有两次刷盘， redo log prepare 阶段和 binlog 写盘。
+
+为了提高 IO 效率，InnoDB 使用组提交 (group commit)。如果多个并发事务都到达了 redo log prepare 阶段需要写盘，第一个到达的 trx1 会被选为 leader。
+在写盘的时候，LSN(日志逻辑序列号, log sequence number) 已经有 trx1, trx2 和 trx3。trx1 写盘返回后，trx2 和 trx3 就可以直接返回了。
 ### undo log
 
 回滚日志， 可以用来实现 MVCC 下的 read-view 视图。
@@ -354,7 +363,13 @@ lock in share mode 只会对查询条件中的索引加锁，而 for update 会�
 
 ## MySQL 主从
 
-###
+### 主备一致
+
+- 备库和主库会建立一个长连接。备库通过 change master 设置主库的 ip，端口号，用户名，密码，以及请求 binlog 的位置。
+- 备库通过 start slave 命令成为 master 的备库，后台启动 io_thread 和 sql_thread， io_thread 与主库建立连接，sql_thread 处理请求。
+- 主库校验完用户名和密码，从备库请求的位置开始发送 binlong 日志，备库收到后存入中转日志(relay_log)中， sql_thread 读取中转日志进行执行。
+
+根据 binlog 格式的不同(statement, row, mixed), 日志中存放的内容也不相同。
 
 ## 常见问题
 
