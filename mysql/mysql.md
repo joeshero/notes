@@ -370,6 +370,52 @@ lock in share mode 只会对查询条件中的索引加锁，而 for update 会�
 - 主库校验完用户名和密码，从备库请求的位置开始发送 binlong 日志，备库收到后存入中转日志(relay_log)中， sql_thread 读取中转日志进行执行。
 
 根据 binlog 格式的不同(statement, row, mixed), 日志中存放的内容也不相同。
+1. 如果 `binlog_format=STATEMENT`,那么 binlog 中记录的是完整的sql语句，这样可能会造成备库和主库数据的不一致，因为有可能因为选错索引等问题导致
+最后行记录的不同。
+2. 如果 `binlog_format=ROW`，那么 binlog 中记录的是行记录的改变，那么不会造成主备之间的不一致，但可能会使 binlog 文件变大
+3. 如果 `binlog_format=MIXED`, InnoDB 会根据情况灵活使用前两者。
+
+### 循环复制
+
+* 当 A, B 互为主备，即双 M 结构时，当 A 将 binlog 同步给 B，B 执行后会在 binlog 生成对应日志，又会发给 A 去执行，形成了循环。
+
+解决方法：通过 server id。通过规定 A 和 B 的 server id 不同，当 B 收到 A 的 binlog 执行后，在自己的 binlog 中生成日志的 server id 还是
+A，此时再发给 A，A通过判断 server id 与自身的 server id 相等，所以不会执行该日志，来解决循环复制问题。
+
+### 主备延迟
+
+主备延迟就是同一个事务在主库执行时间和备库执行完成时间的差值。可以在备库执行 `show slave status` 来查看。主备延迟最直接的表现是备库执行中转
+日志的速度小于主库生成 binlog 的速度。主要原因有：
+- 主备库所在的机器性能之间有差距，如果多个备库部署在同一台机器，多个备库争抢资源，造成主备延迟。
+- 备库的压力大。备库的查询占用大量的 CPU 资源，影响同步速度。
+- 大事务的影响。如果一个事务在主库执行 10 分钟，那么传到备库又会执行 10 分钟，造成主备延迟为 10 分钟。
+- 备库的并行复制能力。
+
+### 并行复制
+
+5.6 版本之前采用单线程复制，之后使用多线程复制，提高备库复制能力。其中，coordinator 负责读取中转日志并且分发事务，真正更新日志的是 worker 线程，
+由 `lave_parallel_workers` 来控制。
+- 同一事务不能拆开执行，只能由一个 worker 执行。
+- 不能造成更新覆盖。更新同一行的两个事务必须由同一 worker 执行。
+
+**分发策略**
+
+- 按库分发 (5.6)
+- `slave-parallel-type` 参数来控制 (5.7)
+
+1. DATABASE。 使用 5.6 版本的按库并行
+2. LOGICAL_CLOCK。组提交, 同时处于 redo log prepare 状态的事务或者 prepare 和 commit 之间的事务可以并行执行
+
+- 新增 WRITESET 策略 (5.7.22)，使用 `binlog-transaction-dependency-tracking` 来控制
+
+1. COMMIT_ORDER，根据同时进入 prepare 和 commit 来判断是否可以并行的策略。
+2. WRITESET。对事务要更新的每个行计算出一个 hash 值存入 writeset，如果两个事务的 writeset 没有交集，就可以并行执行。
+3. WRITESET_SESSION。在 WRITESET 的基础上增加了一个约束。在主库上同一个线程先后执行的两个事务，在备库也要按照同样的顺序。
+
+### 主备切换
+
+
+ 
 
 ## 常见问题
 
