@@ -52,7 +52,7 @@ Java 堆可以不是物理上连续的内存空间，就像我们的磁盘一样
   <img src="../assets/jvm/gcroot.png" width = "450" alt="gcroot.png" />
 </div>
 
-### 三色标记法
+### 三色标记法(并发标记)
 
 <div align="center">
   <img src="../assets/jvm/三色标记法.webp" width = "450" alt="三色标记法" />
@@ -75,13 +75,33 @@ Java 堆可以不是物理上连续的内存空间，就像我们的磁盘一样
   <img src="../assets/jvm/三色标记-多标.png" width = "450" alt="三色标记-多标.png" />
 </div>
 
-解决方法：当黑色对象
+**解决方法**：成为浮动垃圾，需要等下一次垃圾收集时回收。
 
-- 漏标：
+- 漏标：满足两个条件时会触发，灰色对象断开了白色对象的引用，黑色对象建立了与该对象的引用。结果会导致该白色对象不会被标记，被错误的回收。
+
+```
+Object G = objectE.fieldG;//读
+objectE.fieldG = null;//写
+objectD.fieldG = G;//写
+```
+
+**解决方法**：增量更新和原始快照 (SATB)(本质都是利用写屏障实现) 和写屏障，需要 STW。
+
+- 写屏障 + SATB (CMS 处理器使用)
+当 `objectE.fieldG = null` 时，利用写屏障，将原有的对象记录下来，在并发扫描结束后，再将这些对象为根，重新再扫描一遍。思路是：保留原始 
+GC Roots 的快照图，按照扫描开始那一时刻的对象图进行扫描。(破坏了条件：灰色对象断开了对白色对象的引用)
+
+**优化**：如果不是处于并发标记阶段或者该对象已经被标记过，就不会再次标记了
+
+- 写屏障 + 增量更新 (G1 收集器)
+当 `objectD.fieldG = G` 时，将新增的对象记录下来，之后再重新遍历。
 
 <div align="center">
   <img src="../assets/jvm/三色标记-漏标.png" width = "450" alt="三色标记-漏标.png" />
 </div>
+
+- 读屏障 (ZGC 收集器)
+当 `Object G = objectE.fieldG` 时，记录下读取到的对象.
 
 ### 引用类型
 
