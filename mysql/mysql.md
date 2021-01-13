@@ -80,6 +80,19 @@ redo log buffer 和 redo log file。redo log 通过循环写来记录变更，�
 在事务执行过程中，redo log 写入 redo log buffer 中，在事务没提交之前，不需要持久化到磁盘。但一个没有提交事务的 redo log 有可能被持久化到
 磁盘。InnoDB 利用 `innodb_flush_log_at_trx_commit` 来控制 redo log 的写入。
 
+- 设置为 0，表示每次事务提交都把 redo log 留在 redo log buffer 中。
+- 设置为 1，表示每次事务提交直接把 redo log 持久化到磁盘。
+- 设置为 2，表示每次事务提交都直接把 redo log 写到 page cache 中。
+
+InnoDB 后台有个线程，每隔 1s 会将 redo log 调用 write 写到 文件系统的 page cache 中，再调用 fsync 持久化到磁盘。除此之外，还有两种情况会
+写盘。
+
+- 使用 redo log buffer 的大小超过 `innodb_log_buffer_size` 的一半，会调用 write 写盘。
+- 如果 `innodb_flush_log_at_trx_commit` 设置为 1, 一个事务的提交会将 redo log 写盘，如果 buffer 中有未提交事务的日志，也会写盘。
+
+如果将 `innodb_flush_log_at_trx_commit` 设置为 1，那么 redo log 在 prepare 阶段就要持久化一次。 由于后台线程每秒一次刷盘和崩溃恢复机制，
+所以 redo log commit 阶段只需要 write 到page cache即可。
+
 ### binlog
 
 归档日志，Server 层日志，每个存储引擎共享，逻辑日志，记录某行发生了什么改变。
@@ -132,6 +145,12 @@ write 和 fsync 的时机是由参数 `sync_binlog` 来控制的：
  
 **将 sync_binlog 设置为 N，如果主机重启，最多可丢失 N 个事务的 binlog 日志**。
 
+#### 双 "1" 配置
+
+将 `sync_binlog` 和 `innodb_flush_log_at_trx_commit` 都设置为1，这样一次事务提交会有两次刷盘， redo log prepare 阶段和 binlog 写盘。
+
+为了提高 IO 效率，InnoDB 使用组提交 (group commit)。如果多个并发事务都到达了 redo log prepare 阶段需要写盘，第一个到达的 trx1 会被选为 leader。
+在写盘的时候，LSN(日志逻辑序列号, log sequence number) 已经有 trx1, trx2 和 trx3。trx1 写盘返回后，trx2 和 trx3 就可以直接返回了。
 ### undo log
 
 回滚日志， 可以用来实现 MVCC 下的 read-view 视图。
@@ -344,7 +363,59 @@ lock in share mode 只会对查询条件中的索引加锁，而 for update 会�
 
 ## MySQL 主从
 
-###
+### 主备一致
+
+- 备库和主库会建立一个长连接。备库通过 change master 设置主库的 ip，端口号，用户名，密码，以及请求 binlog 的位置。
+- 备库通过 start slave 命令成为 master 的备库，后台启动 io_thread 和 sql_thread， io_thread 与主库建立连接，sql_thread 处理请求。
+- 主库校验完用户名和密码，从备库请求的位置开始发送 binlong 日志，备库收到后存入中转日志(relay_log)中， sql_thread 读取中转日志进行执行。
+
+根据 binlog 格式的不同(statement, row, mixed), 日志中存放的内容也不相同。
+1. 如果 `binlog_format=STATEMENT`,那么 binlog 中记录的是完整的sql语句，这样可能会造成备库和主库数据的不一致，因为有可能因为选错索引等问题导致
+最后行记录的不同。
+2. 如果 `binlog_format=ROW`，那么 binlog 中记录的是行记录的改变，那么不会造成主备之间的不一致，但可能会使 binlog 文件变大
+3. 如果 `binlog_format=MIXED`, InnoDB 会根据情况灵活使用前两者。
+
+### 循环复制
+
+* 当 A, B 互为主备，即双 M 结构时，当 A 将 binlog 同步给 B，B 执行后会在 binlog 生成对应日志，又会发给 A 去执行，形成了循环。
+
+解决方法：通过 server id。通过规定 A 和 B 的 server id 不同，当 B 收到 A 的 binlog 执行后，在自己的 binlog 中生成日志的 server id 还是
+A，此时再发给 A，A通过判断 server id 与自身的 server id 相等，所以不会执行该日志，来解决循环复制问题。
+
+### 主备延迟
+
+主备延迟就是同一个事务在主库执行时间和备库执行完成时间的差值。可以在备库执行 `show slave status` 来查看。主备延迟最直接的表现是备库执行中转
+日志的速度小于主库生成 binlog 的速度。主要原因有：
+- 主备库所在的机器性能之间有差距，如果多个备库部署在同一台机器，多个备库争抢资源，造成主备延迟。
+- 备库的压力大。备库的查询占用大量的 CPU 资源，影响同步速度。
+- 大事务的影响。如果一个事务在主库执行 10 分钟，那么传到备库又会执行 10 分钟，造成主备延迟为 10 分钟。
+- 备库的并行复制能力。
+
+### 并行复制
+
+5.6 版本之前采用单线程复制，之后使用多线程复制，提高备库复制能力。其中，coordinator 负责读取中转日志并且分发事务，真正更新日志的是 worker 线程，
+由 `lave_parallel_workers` 来控制。
+- 同一事务不能拆开执行，只能由一个 worker 执行。
+- 不能造成更新覆盖。更新同一行的两个事务必须由同一 worker 执行。
+
+**分发策略**
+
+- 按库分发 (5.6)
+- `slave-parallel-type` 参数来控制 (5.7)
+
+1. DATABASE。 使用 5.6 版本的按库并行
+2. LOGICAL_CLOCK。组提交, 同时处于 redo log prepare 状态的事务或者 prepare 和 commit 之间的事务可以并行执行
+
+- 新增 WRITESET 策略 (5.7.22)，使用 `binlog-transaction-dependency-tracking` 来控制
+
+1. COMMIT_ORDER，根据同时进入 prepare 和 commit 来判断是否可以并行的策略。
+2. WRITESET。对事务要更新的每个行计算出一个 hash 值存入 writeset，如果两个事务的 writeset 没有交集，就可以并行执行。
+3. WRITESET_SESSION。在 WRITESET 的基础上增加了一个约束。在主库上同一个线程先后执行的两个事务，在备库也要按照同样的顺序。
+
+### 主备切换
+
+
+ 
 
 ## 常见问题
 
