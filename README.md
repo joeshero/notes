@@ -7,3 +7,4 @@ study notes
 - [mysql](./mysql/mysql.md)
 - [spring](./spring/spring.md)
 - [jvm](./java/jvm.md)
+- [redis](./redis/redis.md)
